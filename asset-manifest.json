@@ -1,0 +1,13 @@
+{
+  "files": {
+    "main.css": "/vocal-warmups-app/static/css/main.844534d8.css",
+    "main.js": "/vocal-warmups-app/static/js/main.9aea6c05.js",
+    "index.html": "/vocal-warmups-app/index.html",
+    "main.844534d8.css.map": "/vocal-warmups-app/static/css/main.844534d8.css.map",
+    "main.9aea6c05.js.map": "/vocal-warmups-app/static/js/main.9aea6c05.js.map"
+  },
+  "entrypoints": [
+    "static/css/main.844534d8.css",
+    "static/js/main.9aea6c05.js"
+  ]
+}
