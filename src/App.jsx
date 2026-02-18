@@ -271,7 +271,12 @@ const [iterations, setIterations] = useState(5);
       if (audioContextRef.current.state === 'suspended') {
         audioContextRef.current.resume();
       }
-      instrumentRef.current.start({ note: midiNumber, velocity: 80 });
+      // Use short duration to minimize reverb
+      instrumentRef.current.start({ 
+        note: midiNumber, 
+        velocity: 80,
+        duration: 0.5 // 500ms - short and crisp
+      });
     }
   };
 
@@ -386,18 +391,18 @@ const playWarmup = async () => {
         const displayText = sequence.label ? `${syllable} ${sequence.label}` : syllable;
         setCurrentSyllable(displayText);
         
-        // Play the note
+        // Play the note with reduced duration to minimize reverb
         if (instrumentRef.current) {
           instrumentRef.current.start({ 
             note: midiNumber, 
             velocity: 80,
-            duration: duration / 1000 // smplr expects seconds
+            duration: (duration * 0.3) / 1000 // 30% of beat duration, smplr expects seconds
           });
         }
         
         const timeout2 = setTimeout(() => {
           setActiveNotes([]);
-        }, duration * 0.9);
+        }, duration * 0.35); // Match the shortened audio duration
         
         timeoutsRef.current.push(timeout2);
       }, currentTime);
