@@ -1,491 +1,313 @@
-import React, { useState, useEffect, useRef } from 'react';
+import React, { useState, useEffect, useRef, useCallback } from 'react';
 import { Piano, KeyboardShortcuts, MidiNumbers } from 'react-piano';
 import { SplendidGrandPiano, Soundfont } from 'smplr';
 import 'react-piano/dist/styles.css';
 import './App.css';
 
-// Warmup patterns
-// Enhanced warmups object with ascending/descending sequence support
+// ─── Chord intro definitions ─────────────────────────────────────────────────
+// Semitone offsets from root played simultaneously before the exercise begins.
+// Convention: tonic triad (root, 3rd, 5th) is standard choral "tuning chord".
+// Fifths exercises use root + 5th since that's the interval being drilled.
+// Octave jumps omitted — it's a unison exercise, no chord intro makes sense.
+const CHORD_INTROS = {
+  majorScale:           [0, 4, 7],
+  majorScaleDescending: [0, 4, 7],
+  majorScaleAscending:  [0, 4, 7],
+  arpeggio:             [0, 4, 7],
+  arpeggioDescending:   [0, 4, 7],
+  arpeggioAscending:    [0, 4, 7],
+  triad:                [0, 4, 7],
+  triadDescending:      [0, 4, 7],
+  triadAscending:       [0, 4, 7],
+  triadRoundTrip:       [0, 4, 7],
+  fifths:               [0, 7],
+  fifthsDescending:     [0, 7],
+  fifthsAscending:      [0, 7],
+  fifthsRoundTrip:      [0, 7],
+};
 
+// ─── Rhythm presets ──────────────────────────────────────────────────────────
+const RHYTHM_PRESETS = [
+  { id: 'original',   label: 'Original',   desc: "Restore the exercise's default rhythm",          apply: (base) => [...base] },
+  { id: 'even',       label: 'Even',       desc: 'All notes equal — good for learning pitches',     apply: (base) => base.map(() => 1) },
+  { id: 'first-held', label: 'Hold 1st',   desc: 'First note long, rest quick — classic choral entry', apply: (base) => base.map((_, i) => i === 0 ? 3 : 0.5) },
+  { id: 'last-held',  label: 'Hold Last',  desc: 'Last note stretched — builds breath support',    apply: (base) => base.map((_, i) => i === base.length - 1 ? 3 : 1) },
+  { id: 'dotted',     label: 'Dotted',     desc: 'Long–short pairs — forward momentum',            apply: (base) => base.map((_, i) => i % 2 === 0 ? 1.5 : 0.5) },
+  { id: 'staccato',   label: 'Staccato',   desc: 'Short, detached — crisp articulation',           apply: (base) => base.map(() => 0.5) },
+];
+
+// Duration levels user can cycle through per note block
+const DURATION_LEVELS = [
+  { value: 0.25, label: '¼' },
+  { value: 0.5,  label: '½' },
+  { value: 1,    label: '1' },
+  { value: 1.5,  label: '1½' },
+  { value: 2,    label: '2' },
+  { value: 3,    label: '3' },
+];
+
+function nearestLevel(val) {
+  return DURATION_LEVELS.reduce((prev, curr) =>
+    Math.abs(curr.value - val) < Math.abs(prev.value - val) ? curr : prev
+  );
+}
+function nextLevel(val) {
+  const idx = DURATION_LEVELS.findIndex(l => l.value === nearestLevel(val).value);
+  return DURATION_LEVELS[(idx + 1) % DURATION_LEVELS.length].value;
+}
+
+// ─── Warmup data ─────────────────────────────────────────────────────────────
 const warmups = {
-  // Original static exercises
-  majorScale: {
-    name: "Major Scale",
-    type: "static",
-    pattern: [0, 2, 4, 5, 7, 9, 11, 12, 11, 9, 7, 5, 4, 2, 0],
-    rhythm: [1, 1, 1, 1, 1, 1, 1, 2, 1, 1, 1, 1, 1, 1, 2],
-    syllables: "Do Re Mi Fa Sol La Ti Do Ti La Sol Fa Mi Re Do"
-  },
-  
-  arpeggio: {
-    name: "Major Arpeggio",
-    type: "static",
-    pattern: [0, 4, 7, 12, 7, 4, 0],
-    rhythm: [1, 1, 1, 2, 1, 1, 2],
-    syllables: "Do Mi Sol Do Sol Mi Do"
-  },
-  
-  fifths: {
-    name: "Ascending Fifths",
-    type: "static",
-    pattern: [0, 7, 0, 7, 0],
-    rhythm: [2, 2, 2, 2, 4],
-    syllables: "Ah Ah Ah Ah Ah"
-  },
-  
-  octaveJumps: {
-    name: "Octave Jumps",
-    type: "static",
-    pattern: [0, 12, 0, 12, 0],
-    rhythm: [1, 1, 1, 1, 4],
-    syllables: "Ha Ha Ha Ha Ha"
-  },
-  
-  triad: {
-    name: "Triad (1-3-5-3-1)",
-    type: "static",
-    pattern: [0, 4, 7, 4, 0],
-    rhythm: [1, 1, 1, 1, 2],
-    syllables: "Ma Me Mi Mo Mu"
-  },
-
-  // ============ NEW: Descending Sequence Exercises ============
-  
-  triadDescending: {
-    name: "Triad - Descending (Range Explorer)",
-    type: "descending",
-    basePattern: [0, 4, 7, 4, 0],
-    rhythm: [1, 1, 1, 1, 2],
-    baseSyllables: "Ma Me Mi Mo Mu",
-    stepSize: 2, // whole step
-    iterations: 5
-  },
-  
-  fifthsDescending: {
-    name: "Fifths - Descending (Range Explorer)",
-    type: "descending",
-    basePattern: [0, 7, 0],
-    rhythm: [2, 2, 4],
-    baseSyllables: "Ah Ah Ah",
-    stepSize: 2,
-    iterations: 6
-  },
-  
-  majorScaleDescending: {
-    name: "Major Scale - Descending (Range Explorer)",
-    type: "descending",
-    basePattern: [0, 2, 4, 5, 7, 9, 11, 12, 11, 9, 7, 5, 4, 2, 0],
-    rhythm: [1, 1, 1, 1, 1, 1, 1, 2, 1, 1, 1, 1, 1, 1, 2],
-    baseSyllables: "Do Re Mi Fa Sol La Ti Do Ti La Sol Fa Mi Re Do",
-    stepSize: 1, // semitone
-    iterations: 12
-  },
-  
-  arpeggioDescending: {
-    name: "Arpeggio - Descending (Range Explorer)",
-    type: "descending",
-    basePattern: [0, 4, 7, 12, 7, 4, 0],
-    rhythm: [1, 1, 1, 2, 1, 1, 2],
-    baseSyllables: "Do Mi Sol Do Sol Mi Do",
-    stepSize: 2,
-    iterations: 6
-  },
-
-  // ============ NEW: Ascending Sequence Exercises ============
-  
-  triadAscending: {
-    name: "Triad - Ascending (Range Building)",
-    type: "ascending",
-    basePattern: [0, 4, 7, 4, 0],
-    rhythm: [1, 1, 1, 1, 2],
-    baseSyllables: "Ma Me Mi Mo Mu",
-    stepSize: 2, // whole step
-    iterations: 5
-  },
-  
-  fifthsAscending: {
-    name: "Fifths - Ascending (Range Building)",
-    type: "ascending",
-    basePattern: [0, 7, 0],
-    rhythm: [2, 2, 4],
-    baseSyllables: "Ah Ah Ah",
-    stepSize: 2,
-    iterations: 6
-  },
-  
-  majorScaleAscending: {
-    name: "Major Scale - Ascending (Range Building)",
-    type: "ascending",
-    basePattern: [0, 2, 4, 5, 7, 9, 11, 12, 11, 9, 7, 5, 4, 2, 0],
-    rhythm: [1, 1, 1, 1, 1, 1, 1, 2, 1, 1, 1, 1, 1, 1, 2],
-    baseSyllables: "Do Re Mi Fa Sol La Ti Do Ti La Sol Fa Mi Re Do",
-    stepSize: 1, // semitone
-    iterations: 12
-  },
-  
-  arpeggioAscending: {
-    name: "Arpeggio - Ascending (Range Building)",
-    type: "ascending",
-    basePattern: [0, 4, 7, 12, 7, 4, 0],
-    rhythm: [1, 1, 1, 2, 1, 1, 2],
-    baseSyllables: "Do Mi Sol Do Sol Mi Do",
-    stepSize: 2,
-    iterations: 6
-  },
-
-  // ============ NEW: Up & Down Sequence (bidirectional) ============
-  
-  triadRoundTrip: {
-    name: "Triad - Round Trip (Full Range)",
-    type: "roundtrip",
-    basePattern: [0, 4, 7, 4, 0],
-    rhythm: [1, 1, 1, 1, 2],
-    baseSyllables: "Ma Me Mi Mo Mu",
-    stepSize: 2,
-    iterations: 5 // goes down 5, then up 5
-  },
-  
-  fifthsRoundTrip: {
-    name: "Fifths - Round Trip (Full Range)",
-    type: "roundtrip",
-    basePattern: [0, 7, 0],
-    rhythm: [2, 2, 4],
-    baseSyllables: "Ah Ah Ah",
-    stepSize: 2,
-    iterations: 6
-  }
+  majorScale:           { name: 'Major Scale',            type: 'static',    pattern: [0,2,4,5,7,9,11,12,11,9,7,5,4,2,0], rhythm: [1,1,1,1,1,1,1,2,1,1,1,1,1,1,2], syllables: 'Do Re Mi Fa Sol La Ti Do Ti La Sol Fa Mi Re Do' },
+  arpeggio:             { name: 'Major Arpeggio',          type: 'static',    pattern: [0,4,7,12,7,4,0],                    rhythm: [1,1,1,2,1,1,2],                  syllables: 'Do Mi Sol Do Sol Mi Do' },
+  fifths:               { name: 'Ascending Fifths',        type: 'static',    pattern: [0,7,0,7,0],                         rhythm: [2,2,2,2,4],                      syllables: 'Ah Ah Ah Ah Ah' },
+  octaveJumps:          { name: 'Octave Jumps',            type: 'static',    pattern: [0,12,0,12,0],                       rhythm: [1,1,1,1,4],                      syllables: 'Ha Ha Ha Ha Ha' },
+  triad:                { name: 'Triad (1–3–5–3–1)',       type: 'static',    pattern: [0,4,7,4,0],                         rhythm: [1,1,1,1,2],                      syllables: 'Ma Me Mi Mo Mu' },
+  triadDescending:      { name: 'Triad – Descending',      type: 'descending',  basePattern: [0,4,7,4,0],   rhythm: [1,1,1,1,2], baseSyllables: 'Ma Me Mi Mo Mu', stepSize: 2, iterations: 5 },
+  fifthsDescending:     { name: 'Fifths – Descending',     type: 'descending',  basePattern: [0,7,0],        rhythm: [2,2,4],    baseSyllables: 'Ah Ah Ah',       stepSize: 2, iterations: 6 },
+  majorScaleDescending: { name: 'Major Scale – Descending',type: 'descending',  basePattern: [0,2,4,5,7,9,11,12,11,9,7,5,4,2,0], rhythm: [1,1,1,1,1,1,1,2,1,1,1,1,1,1,2], baseSyllables: 'Do Re Mi Fa Sol La Ti Do Ti La Sol Fa Mi Re Do', stepSize: 1, iterations: 12 },
+  arpeggioDescending:   { name: 'Arpeggio – Descending',   type: 'descending',  basePattern: [0,4,7,12,7,4,0], rhythm: [1,1,1,2,1,1,2], baseSyllables: 'Do Mi Sol Do Sol Mi Do', stepSize: 2, iterations: 6 },
+  triadAscending:       { name: 'Triad – Ascending',       type: 'ascending',   basePattern: [0,4,7,4,0],   rhythm: [1,1,1,1,2], baseSyllables: 'Ma Me Mi Mo Mu', stepSize: 2, iterations: 5 },
+  fifthsAscending:      { name: 'Fifths – Ascending',      type: 'ascending',   basePattern: [0,7,0],        rhythm: [2,2,4],    baseSyllables: 'Ah Ah Ah',       stepSize: 2, iterations: 6 },
+  majorScaleAscending:  { name: 'Major Scale – Ascending', type: 'ascending',   basePattern: [0,2,4,5,7,9,11,12,11,9,7,5,4,2,0], rhythm: [1,1,1,1,1,1,1,2,1,1,1,1,1,1,2], baseSyllables: 'Do Re Mi Fa Sol La Ti Do Ti La Sol Fa Mi Re Do', stepSize: 1, iterations: 12 },
+  arpeggioAscending:    { name: 'Arpeggio – Ascending',    type: 'ascending',   basePattern: [0,4,7,12,7,4,0], rhythm: [1,1,1,2,1,1,2], baseSyllables: 'Do Mi Sol Do Sol Mi Do', stepSize: 2, iterations: 6 },
+  triadRoundTrip:       { name: 'Triad – Round Trip',      type: 'roundtrip',   basePattern: [0,4,7,4,0],   rhythm: [1,1,1,1,2], baseSyllables: 'Ma Me Mi Mo Mu', stepSize: 2, iterations: 5 },
+  fifthsRoundTrip:      { name: 'Fifths – Round Trip',     type: 'roundtrip',   basePattern: [0,7,0],        rhythm: [2,2,4],    baseSyllables: 'Ah Ah Ah',       stepSize: 2, iterations: 6 },
 };
 
-
-// Vocal part ranges
 const vocalRanges = {
-  bass: { 
-    root: MidiNumbers.fromNote('E2'), 
-    color: '#1e40af',
-    displayRange: { first: MidiNumbers.fromNote('E2'), last: MidiNumbers.fromNote('E4') }
-  },
-  baritone: { 
-    root: MidiNumbers.fromNote('A2'), 
-    color: '#059669',
-    displayRange: { first: MidiNumbers.fromNote('A2'), last: MidiNumbers.fromNote('A4') }
-  },
-  tenor: { 
-    root: MidiNumbers.fromNote('C3'), 
-    color: '#d97706',
-    displayRange: { first: MidiNumbers.fromNote('C3'), last: MidiNumbers.fromNote('C5') }
-  },
-  alto: { 
-    root: MidiNumbers.fromNote('G3'), 
-    color: '#dc2626',
-    displayRange: { first: MidiNumbers.fromNote('G3'), last: MidiNumbers.fromNote('G5') }
-  },
-  soprano: { 
-    root: MidiNumbers.fromNote('C4'), 
-    color: '#9333ea',
-    displayRange: { first: MidiNumbers.fromNote('C4'), last: MidiNumbers.fromNote('C6') }
-  }
+  bass:     { root: MidiNumbers.fromNote('E2'), color: '#1e40af', displayRange: { first: MidiNumbers.fromNote('E2'), last: MidiNumbers.fromNote('E4') } },
+  baritone: { root: MidiNumbers.fromNote('A2'), color: '#059669', displayRange: { first: MidiNumbers.fromNote('A2'), last: MidiNumbers.fromNote('A4') } },
+  tenor:    { root: MidiNumbers.fromNote('C3'), color: '#d97706', displayRange: { first: MidiNumbers.fromNote('C3'), last: MidiNumbers.fromNote('C5') } },
+  alto:     { root: MidiNumbers.fromNote('G3'), color: '#dc2626', displayRange: { first: MidiNumbers.fromNote('G3'), last: MidiNumbers.fromNote('G5') } },
+  soprano:  { root: MidiNumbers.fromNote('C4'), color: '#9333ea', displayRange: { first: MidiNumbers.fromNote('C4'), last: MidiNumbers.fromNote('C6') } },
 };
 
+// ─── RhythmEditor ─────────────────────────────────────────────────────────────
+function RhythmEditor({ baseRhythm, customRhythm, onChange, syllables, disabled }) {
+  const syllableList = (syllables || '').split(' ');
+
+  const handleBlockClick = (i) => {
+    if (disabled) return;
+    const updated = [...customRhythm];
+    updated[i] = nextLevel(updated[i]);
+    onChange(updated);
+  };
+
+  return (
+    <div className="rhythm-editor">
+      <div className="rhythm-presets-row">
+        {RHYTHM_PRESETS.map(p => (
+          <button
+            key={p.id}
+            className="rp-chip"
+            onClick={() => !disabled && onChange(p.apply(baseRhythm))}
+            disabled={disabled}
+            title={p.desc}
+          >
+            {p.label}
+          </button>
+        ))}
+      </div>
+
+      <div className="rhythm-blocks-row">
+        {customRhythm.map((val, i) => {
+          const level = nearestLevel(val);
+          // Bar height: 0.25→12%, 0.5→25%, 1→45%, 1.5→62%, 2→78%, 3→100%
+          const heightPct = Math.round(Math.min(100, (val / 3) * 100));
+          return (
+            <button
+              key={i}
+              className={`rb ${disabled ? 'rb--disabled' : ''}`}
+              onClick={() => handleBlockClick(i)}
+              disabled={disabled}
+              title={`${syllableList[i] || `Note ${i+1}`}: ${level.label} beats — click to cycle`}
+            >
+              <span className="rb__track">
+                <span className="rb__bar" style={{ height: `${Math.max(12, heightPct)}%` }} />
+              </span>
+              <span className="rb__beat">{level.label}</span>
+              {syllableList[i] && <span className="rb__syl">{syllableList[i]}</span>}
+            </button>
+          );
+        })}
+      </div>
+      <p className="rhythm-editor-hint">Click a bar to cycle its duration</p>
+    </div>
+  );
+}
+
+// ─── App ──────────────────────────────────────────────────────────────────────
 function App() {
-  const [selectedWarmup, setSelectedWarmup] = useState('majorScale');
-  const [vocalPart, setVocalPart] = useState('tenor');
-  const [tempo, setTempo] = useState(120);
-  const [isPlaying, setIsPlaying] = useState(false);
-  const [activeNotes, setActiveNotes] = useState([]);
-  const [currentSyllable, setCurrentSyllable] = useState('');
-  const [loop, setLoop] = useState(false);
+  const [selectedWarmup, setSelectedWarmup]     = useState('majorScale');
+  const [vocalPart, setVocalPart]               = useState('tenor');
+  const [tempo, setTempo]                       = useState(120);
+  const [isPlaying, setIsPlaying]               = useState(false);
+  const [activeNotes, setActiveNotes]           = useState([]);
+  const [currentSyllable, setCurrentSyllable]   = useState('');
+  const [loop, setLoop]                         = useState(false);
   const [selectedInstrument, setSelectedInstrument] = useState('piano');
   const [instrumentLoaded, setInstrumentLoaded] = useState(false);
-const [stepSize, setStepSize] = useState(2);
-const [iterations, setIterations] = useState(5);
-  
-  const instrumentRef = useRef(null);
-  const timeoutsRef = useRef([]);
+  const [chordIntroEnabled, setChordIntroEnabled] = useState(false);
+  const [customRhythm, setCustomRhythm]         = useState(() => [...warmups.majorScale.rhythm]);
+
+  const instrumentRef   = useRef(null);
+  const timeoutsRef     = useRef([]);
   const audioContextRef = useRef(null);
 
-  // Initialize audio context and instrument
-  useEffect(() => {
-    const initializeInstrument = async () => {
-      setInstrumentLoaded(false);
-      
-      // Create audio context if it doesn't exist
-      if (!audioContextRef.current) {
-        audioContextRef.current = new AudioContext();
-      }
-      
-      const context = audioContextRef.current;
-      
-      // Dispose of old instrument
-      if (instrumentRef.current) {
-        instrumentRef.current.stop();
-      }
-      
-      // Create new instrument based on selection
-      let newInstrument;
-      switch (selectedInstrument) {
-        case 'piano':
-          newInstrument = new SplendidGrandPiano(context, { volume: 90 });
-          break;
-        case 'marimba':
-          newInstrument = new Soundfont(context, { instrument: 'marimba', volume: 90 });
-          break;
-        case 'cello':
-          newInstrument = new Soundfont(context, { instrument: 'cello', volume: 90 });
-          break;
-        case 'vibraphone':
-          newInstrument = new Soundfont(context, { instrument: 'vibraphone', volume: 90 });
-          break;
-        case 'flute':
-          newInstrument = new Soundfont(context, { instrument: 'flute', volume: 90 });
-          break;
-        default:
-          newInstrument = new SplendidGrandPiano(context, { volume: 90 });
-      }
+  const handleWarmupChange = (key) => {
+    setSelectedWarmup(key);
+    setCustomRhythm([...warmups[key].rhythm]);
+    if (!CHORD_INTROS[key]) setChordIntroEnabled(false);
+  };
 
-      instrumentRef.current = newInstrument;
-      
-      // Wait for instrument to load
-      await newInstrument.load;
+  useEffect(() => {
+    const init = async () => {
+      setInstrumentLoaded(false);
+      if (!audioContextRef.current) audioContextRef.current = new AudioContext();
+      const ctx = audioContextRef.current;
+      if (instrumentRef.current) instrumentRef.current.stop();
+      let inst;
+      switch (selectedInstrument) {
+        case 'marimba':    inst = new Soundfont(ctx, { instrument: 'marimba',    volume: 90 }); break;
+        case 'cello':      inst = new Soundfont(ctx, { instrument: 'cello',      volume: 90 }); break;
+        case 'vibraphone': inst = new Soundfont(ctx, { instrument: 'vibraphone', volume: 90 }); break;
+        case 'flute':      inst = new Soundfont(ctx, { instrument: 'flute',      volume: 90 }); break;
+        default:           inst = new SplendidGrandPiano(ctx, { volume: 90 });
+      }
+      instrumentRef.current = inst;
+      await inst.load;
       setInstrumentLoaded(true);
     };
-
-    initializeInstrument();
-
-    return () => {
-      if (instrumentRef.current) {
-        instrumentRef.current.stop();
-      }
-    };
+    init();
+    return () => { if (instrumentRef.current) instrumentRef.current.stop(); };
   }, [selectedInstrument]);
 
-  // Clear all timeouts
-  const clearAllTimeouts = () => {
-    timeoutsRef.current.forEach(timeout => clearTimeout(timeout));
-    timeoutsRef.current = [];
-  };
+  const clearAllTimeouts = () => { timeoutsRef.current.forEach(clearTimeout); timeoutsRef.current = []; };
 
-  // Play a single note
-  const playNote = (midiNumber) => {
-    if (instrumentRef.current && instrumentLoaded && audioContextRef.current) {
-      // Resume audio context if needed
-      if (audioContextRef.current.state === 'suspended') {
-        audioContextRef.current.resume();
-      }
-      // Use short duration to minimize reverb
-      instrumentRef.current.start({ 
-        note: midiNumber, 
-        velocity: 80,
-        duration: 0.5 // 500ms - short and crisp
-      });
-    }
-  };
+  const playNote = (midi) => { if (instrumentRef.current && instrumentLoaded) instrumentRef.current.start({ note: midi, velocity: 80 }); setActiveNotes([midi]); };
+  const stopNote = (midi) => { if (instrumentRef.current) instrumentRef.current.stop({ note: midi }); setActiveNotes([]); };
 
-  // Stop note
-  const stopNote = (midiNumber) => {
-    // Note stops automatically with smplr
-  };
-
-  // Play warmup sequence
-  // Enhanced playWarmup function to handle sequence variants
-// Add this to your App.jsx, replacing the existing playWarmup function
-
-const playWarmup = async () => {
-  if (!instrumentLoaded || !instrumentRef.current || !audioContextRef.current) {
-    console.warn('Instrument not loaded yet');
-    return;
-  }
-  
-  // Resume audio context if needed
-  if (audioContextRef.current.state === 'suspended') {
-    await audioContextRef.current.resume();
-  }
-  
-  setIsPlaying(true);
-  clearAllTimeouts();
-
-  const warmup = warmups[selectedWarmup];
-  const rootNote = vocalRanges[vocalPart].root;
-  const beatDuration = (60 / tempo) * 1000; // ms per quarter note
-  
-  // Build the complete sequence based on exercise type
-  let sequences = [];
-  
-  if (warmup.type === 'static') {
-    // Static exercises: single pass
-    sequences.push({
-      pattern: warmup.pattern,
-      rhythm: warmup.rhythm,
-      syllables: warmup.syllables.split(' '),
-      offset: 0,
-      label: ''
-    });
-  } 
-  else if (warmup.type === 'descending') {
-    // Descending: start high, go down
-    for (let i = 0; i < warmup.iterations; i++) {
-      const offset = -(warmup.stepSize * i);
-      sequences.push({
-        pattern: warmup.basePattern,
-        rhythm: warmup.rhythm,
-        syllables: warmup.baseSyllables.split(' '),
-        offset: offset,
-        label: `(${i + 1}/${warmup.iterations})`
-      });
-    }
-  }
-  else if (warmup.type === 'ascending') {
-    // Ascending: start low, go up
-    for (let i = 0; i < warmup.iterations; i++) {
-      const offset = warmup.stepSize * i;
-      sequences.push({
-        pattern: warmup.basePattern,
-        rhythm: warmup.rhythm,
-        syllables: warmup.baseSyllables.split(' '),
-        offset: offset,
-        label: `(${i + 1}/${warmup.iterations})`
-      });
-    }
-  }
-  else if (warmup.type === 'roundtrip') {
-    // Round trip: down then back up
-    const totalIterations = warmup.iterations * 2;
-    
-    // Descending phase
-    for (let i = 0; i < warmup.iterations; i++) {
-      const offset = -(warmup.stepSize * i);
-      sequences.push({
-        pattern: warmup.basePattern,
-        rhythm: warmup.rhythm,
-        syllables: warmup.baseSyllables.split(' '),
-        offset: offset,
-        label: `Down (${i + 1}/${warmup.iterations})`
-      });
-    }
-    
-    // Ascending phase (back up)
-    for (let i = warmup.iterations - 2; i >= 0; i--) {
-      const offset = -(warmup.stepSize * i);
-      sequences.push({
-        pattern: warmup.basePattern,
-        rhythm: warmup.rhythm,
-        syllables: warmup.baseSyllables.split(' '),
-        offset: offset,
-        label: `Up (${warmup.iterations - i}/${warmup.iterations})`
-      });
-    }
-  }
-
-  let currentTime = 0;
-
-  // Play all sequences
-  sequences.forEach((sequence, sequenceIndex) => {
-    sequence.pattern.forEach((semitone, noteIndex) => {
-      const midiNumber = rootNote + semitone + sequence.offset;
-      const duration = sequence.rhythm[noteIndex] * beatDuration;
-      
-      const timeout1 = setTimeout(() => {
-        setActiveNotes([midiNumber]);
-        
-        // Build syllable display with sequence label for variants
-        const syllable = sequence.syllables[noteIndex] || '';
-        const displayText = sequence.label ? `${syllable} ${sequence.label}` : syllable;
-        setCurrentSyllable(displayText);
-        
-        // Play the note with reduced duration to minimize reverb
-        if (instrumentRef.current) {
-          instrumentRef.current.start({ 
-            note: midiNumber, 
-            velocity: 80,
-            duration: (duration * 0.3) / 1000 // 30% of beat duration, smplr expects seconds
-          });
-        }
-        
-        const timeout2 = setTimeout(() => {
-          setActiveNotes([]);
-        }, duration * 0.35); // Match the shortened audio duration
-        
-        timeoutsRef.current.push(timeout2);
-      }, currentTime);
-      
-      timeoutsRef.current.push(timeout1);
-      currentTime += duration;
-    });
-
-    // Add a small pause between sequence iterations (optional, makes it clearer)
-    const pauseBetweenSequences = beatDuration * 0.5;
-    currentTime += pauseBetweenSequences;
-  });
-
-  // Handle end of complete sequence
-  const endTimeout = setTimeout(() => {
-    setIsPlaying(false);
-    setActiveNotes([]);
-    setCurrentSyllable('');
-    
-    if (loop) {
-      playWarmup();
-    }
-  }, currentTime);
-  
-  timeoutsRef.current.push(endTimeout);
-};
-
-  // Stop playback
-  const stopPlayback = () => {
+  const playWarmup = useCallback(() => {
+    if (isPlaying) return;
+    if (audioContextRef.current?.state === 'suspended') audioContextRef.current.resume();
     clearAllTimeouts();
-    setIsPlaying(false);
-    setActiveNotes([]);
+    setIsPlaying(true);
     setCurrentSyllable('');
-  };
 
+    const warmup = warmups[selectedWarmup];
+    const rootNote = vocalRanges[vocalPart].root;
+    const beatDuration = (60 / tempo) * 1000;
+    const mkSyl = (str) => str.split(' ');
 
-  
-  // Cleanup on unmount
-  useEffect(() => {
-    return () => {
-      clearAllTimeouts();
+    let sequences = [];
+    if (warmup.type === 'static') {
+      sequences.push({ notes: warmup.pattern.map(s => rootNote + s), rhythm: customRhythm, syllables: mkSyl(warmup.syllables), label: null });
+    } else if (warmup.type === 'descending') {
+      for (let i = 0; i < warmup.iterations; i++) {
+        const off = -(warmup.stepSize * i);
+        sequences.push({ notes: warmup.basePattern.map(s => rootNote + s + off), rhythm: customRhythm, syllables: mkSyl(warmup.baseSyllables), label: off ? `(${off})` : null });
+      }
+    } else if (warmup.type === 'ascending') {
+      for (let i = 0; i < warmup.iterations; i++) {
+        const off = warmup.stepSize * i;
+        sequences.push({ notes: warmup.basePattern.map(s => rootNote + s + off), rhythm: customRhythm, syllables: mkSyl(warmup.baseSyllables), label: off ? `(+${off})` : null });
+      }
+    } else if (warmup.type === 'roundtrip') {
+      for (let i = 0; i < warmup.iterations; i++) {
+        const off = -(warmup.stepSize * i);
+        sequences.push({ notes: warmup.basePattern.map(s => rootNote + s + off), rhythm: customRhythm, syllables: mkSyl(warmup.baseSyllables), label: off ? `(${off})` : null });
+      }
+      for (let i = warmup.iterations - 2; i >= 0; i--) {
+        const off = -(warmup.stepSize * i);
+        sequences.push({ notes: warmup.basePattern.map(s => rootNote + s + off), rhythm: customRhythm, syllables: mkSyl(warmup.baseSyllables), label: off ? `(${off})` : null });
+      }
+    }
+
+    // Small guaranteed offset so the first event never fires at t=0,
+    // giving the AudioContext.resume() promise time to resolve.
+    let t = 50;
+
+    const chordDef = CHORD_INTROS[selectedWarmup];
+    const scheduleChord = (rootNote, atTime) => {
+      const dur = beatDuration * 2;
+      const midis = chordDef.map(s => rootNote + s);
+      const tid = setTimeout(() => {
+        setCurrentSyllable('♩');
+        setActiveNotes(midis);
+        midis.forEach(m => {
+          if (instrumentRef.current) {
+            instrumentRef.current.start({ note: m, velocity: 65, duration: dur * 0.85 / 1000 });
+          }
+        });
+        const tid2 = setTimeout(() => setActiveNotes([]), dur * 0.9);
+        timeoutsRef.current.push(tid2);
+      }, atTime);
+      timeoutsRef.current.push(tid);
+      return dur + beatDuration * 0.25; // returns how much time the chord consumed
     };
-  }, []);
+
+    // Notes — chord intro inserted before each sequence iteration when enabled
+    sequences.forEach(seq => {
+      // Chord before this iteration
+      if (chordIntroEnabled && chordDef) {
+        // For sequence types, the root shifts per iteration — derive it from
+        // the first note of the sequence minus the first semitone offset
+        const seqRoot = seq.notes[0] - (
+          warmup.type === 'static'
+            ? (warmup.pattern?.[0] ?? 0)
+            : (warmup.basePattern?.[0] ?? 0)
+        );
+        t += scheduleChord(seqRoot, t);
+      }
+
+      seq.notes.forEach((midi, ni) => {
+        const dur = beatDuration * (seq.rhythm[ni] ?? 1);
+        const tid = setTimeout(() => {
+          setActiveNotes([midi]);
+          const syl = seq.syllables[ni] || '';
+          setCurrentSyllable(seq.label ? `${syl} ${seq.label}` : syl);
+          if (instrumentRef.current) {
+            instrumentRef.current.start({ note: midi, velocity: 80, duration: dur * 0.3 / 1000 });
+          }
+          const tid2 = setTimeout(() => setActiveNotes([]), dur * 0.35);
+          timeoutsRef.current.push(tid2);
+        }, t);
+        timeoutsRef.current.push(tid);
+        t += dur;
+      });
+      t += beatDuration * 0.5;
+    });
+
+    const endTid = setTimeout(() => {
+      setIsPlaying(false);
+      setActiveNotes([]);
+      setCurrentSyllable('');
+      if (loop) playWarmup();
+    }, t);
+    timeoutsRef.current.push(endTid);
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [isPlaying, selectedWarmup, vocalPart, tempo, customRhythm, chordIntroEnabled, loop]);
+
+  const stopPlayback = () => { clearAllTimeouts(); setIsPlaying(false); setActiveNotes([]); setCurrentSyllable(''); };
+  useEffect(() => () => clearAllTimeouts(), []);
 
   const baseDisplayRange = vocalRanges[vocalPart].displayRange;
-
-  // Compute the actual note range needed for the current warmup so the piano
-  // expands automatically when a Range Explorer exercise goes beyond the
-  // vocal part's default display boundaries.
   const pianoRange = (() => {
     const warmup = warmups[selectedWarmup];
     const rootNote = vocalRanges[vocalPart].root;
-
-    if (warmup.type === 'static') {
-      return baseDisplayRange;
-    }
-
-    // Build the same offsets playWarmup uses
+    if (warmup.type === 'static') return baseDisplayRange;
     let offsets = [];
-    if (warmup.type === 'descending') {
-      for (let i = 0; i < warmup.iterations; i++) offsets.push(-(warmup.stepSize * i));
-    } else if (warmup.type === 'ascending') {
-      for (let i = 0; i < warmup.iterations; i++) offsets.push(warmup.stepSize * i);
-    } else if (warmup.type === 'roundtrip') {
-      for (let i = 0; i < warmup.iterations; i++) offsets.push(-(warmup.stepSize * i));
-      for (let i = warmup.iterations - 2; i >= 0; i--) offsets.push(-(warmup.stepSize * i));
-    }
-
-    let minNote = baseDisplayRange.first;
-    let maxNote = baseDisplayRange.last;
-
-    offsets.forEach(offset => {
-      warmup.basePattern.forEach(semitone => {
-        const midi = rootNote + semitone + offset;
-        if (midi < minNote) minNote = midi;
-        if (midi > maxNote) maxNote = midi;
-      });
-    });
-
+    if (warmup.type === 'descending')      for (let i = 0; i < warmup.iterations; i++) offsets.push(-(warmup.stepSize * i));
+    else if (warmup.type === 'ascending')  for (let i = 0; i < warmup.iterations; i++) offsets.push(warmup.stepSize * i);
+    else if (warmup.type === 'roundtrip') { for (let i = 0; i < warmup.iterations; i++) offsets.push(-(warmup.stepSize * i)); for (let i = warmup.iterations - 2; i >= 0; i--) offsets.push(-(warmup.stepSize * i)); }
+    let minNote = baseDisplayRange.first, maxNote = baseDisplayRange.last;
+    offsets.forEach(off => warmup.basePattern.forEach(s => { const m = rootNote + s + off; if (m < minNote) minNote = m; if (m > maxNote) maxNote = m; }));
     return { first: minNote, last: maxNote };
   })();
 
-  const currentRange = pianoRange;
+  const currentWarmup = warmups[selectedWarmup];
+  const hasChordIntro = !!CHORD_INTROS[selectedWarmup];
 
   return (
     <div className="app">
@@ -493,55 +315,66 @@ const playWarmup = async () => {
         <h1>🎵 Vocal Warmups</h1>
         <p>Interactive piano-based vocal exercises</p>
       </header>
-
       <main className="main-content">
-        {/* Controls Section */}
         <section className="controls">
+
           <div className="control-group">
-            <label htmlFor="instrument-select">Instrument:</label>
-            <select 
-              id="instrument-select"
-              value={selectedInstrument} 
-              onChange={(e) => setSelectedInstrument(e.target.value)}
-              disabled={isPlaying}
-            >
+            <label htmlFor="instrument-select">Instrument</label>
+            <select id="instrument-select" value={selectedInstrument} onChange={e => setSelectedInstrument(e.target.value)} disabled={isPlaying}>
               <option value="piano">Grand Piano</option>
               <option value="marimba">Marimba</option>
               <option value="cello">Cello</option>
               <option value="vibraphone">Vibraphone</option>
               <option value="flute">Flute</option>
             </select>
-            {!instrumentLoaded && (
-              <span className="loading-indicator">Loading instrument...</span>
-            )}
+            {!instrumentLoaded && <span className="loading-indicator">Loading instrument…</span>}
           </div>
 
           <div className="control-group">
-            <label htmlFor="warmup-select">Warmup Exercise:</label>
-            <select 
-              id="warmup-select"
-              value={selectedWarmup} 
-              onChange={(e) => setSelectedWarmup(e.target.value)}
-              disabled={isPlaying}
-            >
-              {Object.entries(warmups).map(([key, warmup]) => (
-                <option key={key} value={key}>{warmup.name}</option>
-              ))}
+            <label htmlFor="warmup-select">Warmup Exercise</label>
+            <select id="warmup-select" value={selectedWarmup} onChange={e => handleWarmupChange(e.target.value)} disabled={isPlaying}>
+              {Object.entries(warmups).map(([key, w]) => <option key={key} value={key}>{w.name}</option>)}
             </select>
           </div>
 
+          {/* Rhythm editor */}
           <div className="control-group">
-            <label>Vocal Part:</label>
+            <label>Rhythm</label>
+            <RhythmEditor
+              baseRhythm={currentWarmup.rhythm}
+              customRhythm={customRhythm}
+              onChange={setCustomRhythm}
+              syllables={currentWarmup.syllables || currentWarmup.baseSyllables}
+              disabled={isPlaying}
+            />
+          </div>
+
+          {/* Chord intro — only shown when pedagogically applicable */}
+          {hasChordIntro && (
+            <div className="control-group chord-intro-group">
+              <label className="chord-toggle-label">
+                <span className="toggle-switch">
+                  <input type="checkbox" checked={chordIntroEnabled} onChange={e => setChordIntroEnabled(e.target.checked)} disabled={isPlaying} />
+                  <span className="toggle-knob" />
+                </span>
+                <span className="chord-toggle-text">
+                  Tonic chord intro
+                  <span className="chord-toggle-sub">
+                    Plays {CHORD_INTROS[selectedWarmup].length === 2 ? 'root + fifth' : 'I triad (Do–Mi–Sol)'} before exercise — standard choral convention
+                  </span>
+                </span>
+              </label>
+            </div>
+          )}
+
+          <div className="control-group">
+            <label>Vocal Part</label>
             <div className="vocal-part-buttons">
               {Object.entries(vocalRanges).map(([key, range]) => (
                 <button
                   key={key}
                   className={`vocal-part-btn ${vocalPart === key ? 'active' : ''}`}
-                  style={{
-                    backgroundColor: vocalPart === key ? range.color : 'transparent',
-                    borderColor: range.color,
-                    color: vocalPart === key ? 'white' : range.color
-                  }}
+                  style={{ backgroundColor: vocalPart === key ? range.color : 'transparent', borderColor: range.color, color: vocalPart === key ? 'white' : range.color }}
                   onClick={() => setVocalPart(key)}
                   disabled={isPlaying}
                 >
@@ -552,89 +385,46 @@ const playWarmup = async () => {
           </div>
 
           <div className="control-group">
-            <label htmlFor="tempo-slider">
-              Tempo: {tempo} BPM
-            </label>
-            <input
-              id="tempo-slider"
-              type="range"
-              min="60"
-              max="180"
-              value={tempo}
-              onChange={(e) => setTempo(Number(e.target.value))}
-              disabled={isPlaying}
-            />
+            <label htmlFor="tempo-slider">Tempo: {tempo} BPM</label>
+            <input id="tempo-slider" type="range" min="60" max="180" value={tempo} onChange={e => setTempo(Number(e.target.value))} disabled={isPlaying} />
           </div>
 
           <div className="control-group">
             <label>
-              <input
-                type="checkbox"
-                checked={loop}
-                onChange={(e) => setLoop(e.target.checked)}
-              />
+              <input type="checkbox" checked={loop} onChange={e => setLoop(e.target.checked)} />
               Loop Exercise
             </label>
           </div>
 
           <div className="playback-controls">
-            <button 
-              className="play-btn"
-              onClick={playWarmup}
-              disabled={isPlaying || !instrumentLoaded}
-              title={!instrumentLoaded ? "Loading instrument..." : "Play warmup"}
-            >
-              ▶ Play
-            </button>
-            <button 
-              className="stop-btn"
-              onClick={stopPlayback}
-              disabled={!isPlaying}
-            >
-              ■ Stop
-            </button>
+            <button className="play-btn" onClick={playWarmup} disabled={isPlaying || !instrumentLoaded}>▶ Play</button>
+            <button className="stop-btn" onClick={stopPlayback} disabled={!isPlaying}>■ Stop</button>
           </div>
         </section>
 
-        {/* Syllable Display */}
         {currentSyllable && (
           <div className="syllable-display">
             <div className="syllable">{currentSyllable}</div>
           </div>
         )}
 
-        {/* Piano Section */}
         <section className="piano-section">
           <div className="piano-container">
-            <Piano
-              noteRange={currentRange}
-              playNote={playNote}
-              stopNote={stopNote}
-              activeNotes={activeNotes}
-              width={1000}
-              keyboardShortcuts={KeyboardShortcuts.create({
-                firstNote: currentRange.first,
-                lastNote: currentRange.last,
-                keyboardConfig: KeyboardShortcuts.HOME_ROW,
-              })}
-            />
+            <Piano noteRange={pianoRange} playNote={playNote} stopNote={stopNote} activeNotes={activeNotes} width={1000}
+              keyboardShortcuts={KeyboardShortcuts.create({ firstNote: pianoRange.first, lastNote: pianoRange.last, keyboardConfig: KeyboardShortcuts.HOME_ROW })} />
           </div>
-          <p className="piano-hint">
-            Range: {MidiNumbers.getAttributes(currentRange.first).note} - {MidiNumbers.getAttributes(currentRange.last).note}
-          </p>
+          <p className="piano-hint">Range: {MidiNumbers.getAttributes(pianoRange.first).note} – {MidiNumbers.getAttributes(pianoRange.last).note}</p>
         </section>
 
-        {/* Info Section */}
         <section className="info-section">
           <h2>How to Use</h2>
           <ol>
             <li>Select an instrument and wait for it to load</li>
-            <li>Choose a warmup exercise from the dropdown</li>
-            <li>Choose your vocal part (adjusts the pitch range automatically)</li>
-            <li>Adjust the tempo to your preference</li>
-            <li>Press Play to hear and see the exercise</li>
+            <li>Choose a warmup exercise</li>
+            <li>Apply a rhythm preset or click individual bars to fine-tune note durations</li>
+            <li>Enable the tonic chord intro on supported exercises — the conventional choral tuning cue</li>
+            <li>Select your vocal part, set tempo, then press Play</li>
             <li>Enable Loop to repeat continuously</li>
-            <li>Click piano keys to explore your range</li>
           </ol>
         </section>
       </main>
